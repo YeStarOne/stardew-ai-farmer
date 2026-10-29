@@ -1,0 +1,12 @@
+{
+  "Name": "BehaviorBridge",
+  "Author": "aistardew",
+  "Version": "1.0.0",
+  "Description": "HTTP bridge (localhost:7845) exposing BehaviorAutomation area-work to AI scripts",
+  "UniqueID": "aistardew.behaviorbridge",
+  "EntryDll": "BehaviorBridge.dll",
+  "MinimumApiVersion": "4.0.0",
+  "Dependencies": [
+    { "UniqueID": "sznine.BehaviorAutomation", "IsRequired": true }
+  ]
+}

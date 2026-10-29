@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>BehaviorBridge</AssemblyName>
+    <Version>1.0.0</Version>
+    <EnableDefaultItems>true</EnableDefaultItems>
+    <GamePath Condition="'$(GamePath)' == ''">G:\量化系统安装包\V1.6.15</GamePath>
+    <BehaviorDll Condition="'$(BehaviorDll)' == ''">$(GamePath)\Mods\BehaviorAutomation\BehaviorAutomation.dll</BehaviorDll>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="StardewValley.GameData"><HintPath>$(GamePath)\StardewValley.GameData.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="xTile"><HintPath>$(GamePath)\xTile.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Stardew Valley"><HintPath>$(GamePath)\Stardew Valley.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="StardewModdingAPI"><HintPath>$(GamePath)\StardewModdingAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="MonoGame.Framework"><HintPath>$(GamePath)\MonoGame.Framework.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="BehaviorAutomation"><HintPath>$(BehaviorDll)</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

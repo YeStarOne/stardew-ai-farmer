@@ -12,9 +12,37 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 
 export const get = async (p) => (await fetch(BASE + p)).json();
-export const post = async (p, b = {}) => (await fetch(BASE + p, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b)
-})).json();
+
+// ================= 行动日志 (star 项目 0.3.22 借鉴, 2026-10-30 落地) =================
+// 每个副作用动作都落 D:/StardewAI/action-journal.jsonl: {t,id,endpoint,body,result}
+// 用途: loop 重启后对账"刚才那个动作到底成没成"—— 结果未知≠成功(对齐 star 铁律)
+// STARDEW_JOURNAL=0 可关
+const JOURNAL_PATH = 'D:/StardewAI/action-journal.jsonl';
+const JOURNAL_ON = process.env.STARDEW_JOURNAL !== '0';
+let journalSeq = 0;
+function jour(endpoint, body, result) {
+  if (!JOURNAL_ON) return;
+  try {
+    fs.appendFileSync(JOURNAL_PATH, JSON.stringify({
+      t: new Date().toISOString(), id: Date.now() + '-' + (++journalSeq),
+      endpoint, body: body ?? {}, result: JSON.stringify(result).slice(0, 200)
+    }) + '\n');
+  } catch { /* 日志失败绝不影响动作 */ }
+}
+export function readJournal(n = 20) {
+  try {
+    const lines = fs.readFileSync(JOURNAL_PATH, 'utf8').trim().split('\n');
+    return lines.slice(-n).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { return []; }
+}
+
+export const post = async (p, b = {}) => {
+  const r = await (await fetch(BASE + p, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b)
+  })).json();
+  jour(p, b, r);
+  return r;
+};
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export async function st() { return (await get('/state')); }
@@ -452,49 +480,182 @@ export async function sellAndStore(chest, force = false) {
   // 任务保留: 名单内物品绝对不卖(整叠保护, 10-29 曾把乔迪的花椰菜整叠卖掉)
   const sellables = items.filter(i => isSellable(i.name) && !QUEST_RESERVE[i.name]);
   const storables = items.filter(i => shouldStore(i.name));
-  if (!force && slots < 10) return 0;
+  if (!force && slots < 11) return 0;
   if (!sellables.length && !(chest && storables.length)) { log('背包' + slots + '/12 无可卖无箱可存, 跳过'); return 0; }
   log('背包', slots + '/12 → 清仓 | 卖:', sellables.map(i => i.name + 'x' + (i.stack ?? 1)).join(',') || '无',
     '| 存箱:', storables.map(i => i.name).join(',') || '无');
-  const opened = await openBin(); // 内含前台互锁
-  if (!opened) { log('杂货箱没开成(前台被占/残留菜单), 稍后再试'); return 0; }
-  let sold = 0;
-  for (let round = 0; round < 25; round++) {
-    s = await st();
-    if (s.activeMenu?.type !== 'ItemGrabMenu') break;
-    const item = s.inventory.find(i => i.name && isSellable(i.name));
-    if (!item) break;
-    // 必须用 item 自己的 slotIndex(inventory 数组会跳过空格, 数组下标≠格子)
-    const idx = item.slotIndex ?? s.inventory.findIndex(i => i.name === item.name);
-    const x = 265 + (idx % 12) * 65, y = idx < 12 ? 478 : 545;
-    await post('/menu/click', { x, y }).catch(() => null);
-    await sleep(800);
-    s = await st();
-    if (!s.inventory.some(z => z.name === item.name)) { sold++; log('投放', item.name); }
-    else { log('投放失败', item.name); break; }
-    if (s.activeMenu?.type !== 'ItemGrabMenu') break;
-  }
-  await post('/menu_close', {}); await sleep(500);
-  await post('/menu_close', {}); await sleep(300);
-  // 存箱(纯 HTTP, 不需要 UI; /store 只认木箱)
+  // 存箱走纯 HTTP /store, 不需要前台 —— 必须放在 openBin 之前(openBin 失败曾把存箱一起吞掉, 用户 10-30 抓现行)
   let stored = 0;
   if (chest) {
-    // 箱子不在当前地图就先走过去(/store 可能查距离)
-    const cur = await st();
-    const curLoc = cur.location?.name || cur.location;
-    if (chest.loc && curLoc !== chest.loc) {
+    const cur0 = await st();
+    const curLoc0 = cur0.location?.name || cur0.location;
+    if (chest.loc && curLoc0 !== chest.loc) {
       await warp(chest.loc, chest.x, chest.y + 1);
       await sleep(600);
     }
     for (let round = 0; round < 12; round++) {
-      s = await st();
-      const it = s.inventory.find(i => i.name && shouldStore(i.name));
+      const it = (await st()).inventory.find(i => i.name && shouldStore(i.name));
       if (!it) break;
       if (await storeToChest(it.name, chest)) { stored++; log('存箱', it.name); await sleep(400); }
-      else { log('存箱失败', it.name, '→ 下轮再试'); break; }
+      else break;
     }
   }
+  let sold = 0;
+  // 外层 pass: 一轮只投出一条是已知现象(用户 10-30 抓现行: 两条鱼只卖一条), 有剩余就重开箱子再来
+  for (let pass = 0; pass < 6; pass++) {
+    const left = (await st()).inventory.filter(i => i.name && isSellable(i.name) && !QUEST_RESERVE[i.name]).length;
+    if (!left) break;
+    const opened = await openBin(); // 内含前台互锁
+    if (!opened) { log('杂货箱没开成(前台被占/残留菜单), 存箱已完成', stored, '件, 卖货稍后再试'); return stored; }
+    for (let round = 0; round < 25; round++) {
+      s = await st();
+      if (s.activeMenu?.type !== 'ItemGrabMenu') break;
+      const item = s.inventory.find(i => i.name && isSellable(i.name));
+      if (!item) break;
+      // 必须用 item 自己的 slotIndex(inventory 数组会跳过空格, 数组下标≠格子)
+      const idx = item.slotIndex ?? s.inventory.findIndex(i => i.name === item.name);
+      const x = 265 + (idx % 12) * 65, y = idx < 12 ? 478 : 545;
+      await post('/menu/click', { x, y }).catch(() => null);
+      await sleep(800);
+      s = await st();
+      if (!s.inventory.some(z => z.name === item.name)) { sold++; log('投放', item.name); }
+      else { log('投放失败', item.name); break; }
+      if (s.activeMenu?.type !== 'ItemGrabMenu') break;
+    }
+    await post('/menu_close', {}); await sleep(500);
+    await post('/menu_close', {}); await sleep(300);
+  }
+  // (存箱已前置到 openBin 之前, 这里只管卖)
   s = await st();
   log('清仓', sold, '件 存箱', stored, '件 | 钱', s.player.money, '| 格子', s.inventory.filter(i => i.name).length + '/12');
+  if (sold) ledInc('itemsSold', sold, '清仓卖出');
+  if (stored) ledInc('itemsStored', stored, '存木箱');
   return sold;
+}
+
+// 室内传送(2026-10-29验证: POST /warp_into {location,x,y})
+export async function warp_into(loc, x, y) {
+  return post('/warp_into', { location: loc, x, y });
+}
+// 村民速查: 位置/是否在睡/当前台词 (GET /find_npc?name=X)
+export async function findNpc(name) {
+  return get(`/find_npc?name=${encodeURIComponent(name)}`);
+}
+
+// ================= star 项目借鉴(2026-10-30): 精简状态/累计账本/结构化记忆/区域配置 =================
+
+// --- 精简世界状态(增量快照的基元): 一行日志说清"钱/体力/时间/位置/格子", 防日志膨胀 ---
+export function compactState(s) {
+  if (!s?.player) return 'state?';
+  const slots = (s.inventory || []).filter(i => i.name).length;
+  return `Day${s.time?.dayOfMonth} ${s.time?.timeOfDay} 钱${s.player.money} 体${Math.round(s.player.stamina)} `
+    + `${s.location?.name || s.location}@(${s.player.x},${s.player.y}) 格${slots}/12`
+    + (s.activeMenu ? ` 菜单:${s.activeMenu.type}` : '');
+}
+
+// 相邻两次 /state 的差分(只报变化字段), day-loop 轮询时用它替代整包日志
+export function stateDelta(prev, cur) {
+  if (!prev) return { money: cur.player?.money, stamina: cur.player?.stamina, first: true };
+  const d = {};
+  if (prev.player?.money !== cur.player?.money) d.money = cur.player.money;
+  if (Math.round(prev.player?.stamina ?? -1) !== Math.round(cur.player?.stamina ?? -1)) d.stamina = Math.round(cur.player.stamina);
+  if (prev.time?.timeOfDay !== cur.time?.timeOfDay) d.time = cur.time.timeOfDay;
+  if ((prev.location?.name || prev.location) !== (cur.location?.name || cur.location)) d.loc = cur.location?.name || cur.location;
+  if (prev.player?.x !== cur.player?.x || prev.player?.y !== cur.player?.y) d.xy = [cur.player.x, cur.player.y];
+  const pm = prev.inventory?.filter(i => i.name).length ?? 0;
+  const cm = cur.inventory?.filter(i => i.name).length ?? 0;
+  if (pm !== cm) d.slots = `${pm}->${cm}`;
+  if (!!prev.activeMenu !== !!cur.activeMenu) d.menu = cur.activeMenu?.type || null;
+  return Object.keys(d).length ? d : null;
+}
+
+// --- 累计账本 ledger.json: 累计值单独存, recent 只留 20 条有界预览(防历史无限膨胀) ---
+// 铁律: 累计只增不减; "调用结束≠数量完成", 数字一律来自回执差分, 不来自动作标题
+const LEDGER_PATH = 'D:/StardewAI/ledger.json';
+function ledLoad() {
+  try { return JSON.parse(fs.readFileSync(LEDGER_PATH, 'utf8')); } catch { return { totals: {}, recent: [] }; }
+}
+function ledSave(l) {
+  try {
+    const tmp = LEDGER_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(l, null, 1));
+    fs.renameSync(tmp, LEDGER_PATH);
+  } catch { }
+}
+export function ledInc(field, n = 1, note = '') {
+  const l = ledLoad();
+  l.totals[field] = (l.totals[field] ?? 0) + n;
+  if (note || n !== 1) l.recent.unshift({ t: new Date().toISOString(), field, n, note });
+  l.recent = l.recent.slice(0, 20);
+  ledSave(l);
+  return l.totals[field];
+}
+export function ledSnapshot() { return ledLoad(); }
+
+// --- save 级结构化记忆 memory-save.json (star companion_memory 借鉴) ---
+// 条目: {id,kind,text,status,createdAt,supersededBy,source}; kind: rule|event|method|pref
+// 修订不删原文: correct/supersede 把旧的标 superseded 并挂新条目, 冲突有据可查
+// event 类自动封顶 60 条(最旧的直接挤掉, 事件没有修订价值)
+const MEM_PATH = 'D:/StardewAI/memory-save.json';
+const SAVE_ID = '肥鱼肥鱼_452739119';
+function memLoad() {
+  try { return JSON.parse(fs.readFileSync(MEM_PATH, 'utf8')); } catch { return { saveId: SAVE_ID, nextId: 1, entries: [] }; }
+}
+function memSaveDb(m) {
+  const tmp = MEM_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(m, null, 1));
+  fs.renameSync(tmp, MEM_PATH);
+}
+export function memAdd(kind, text, source = 'day-loop') {
+  const m = memLoad();
+  const e = { id: m.nextId++, kind, text: String(text).slice(0, 300), status: 'active', createdAt: new Date().toISOString(), source };
+  m.entries.push(e);
+  if (kind === 'event') {
+    const evs = m.entries.filter(x => x.kind === 'event');
+    if (evs.length > 60) for (const old of evs.slice(0, evs.length - 60)) old.status = 'dropped';
+  }
+  memSaveDb(m);
+  return e.id;
+}
+export function memCorrect(id, newText, why = '') {
+  const m = memLoad();
+  const old = m.entries.find(e => e.id === id && e.status === 'active');
+  if (!old) return null;
+  old.status = 'superseded';
+  const e = { id: m.nextId++, kind: old.kind, text: String(newText).slice(0, 300), status: 'active', createdAt: new Date().toISOString(), source: `correct#${id}${why ? ':' + why : ''}` };
+  m.entries.push(e);
+  memSaveDb(m);
+  return e.id;
+}
+export function memRevoke(id, why = '') {
+  const m = memLoad();
+  const old = m.entries.find(e => e.id === id && e.status === 'active');
+  if (!old) return false;
+  old.status = 'revoked';
+  if (why) old.note = why;
+  memSaveDb(m);
+  return true;
+}
+export function memList(kind = null) {
+  const m = memLoad();
+  return m.entries.filter(e => e.status === 'active' && (!kind || e.kind === kind));
+}
+
+// --- 农场区域配置 farm-region.json (star farmRegion 借鉴): 扩田行为读它, 不靠口头规矩 ---
+const REGION_PATH = 'D:/StardewAI/farm-region.json';
+export function regionConfig() {
+  try { return JSON.parse(fs.readFileSync(REGION_PATH, 'utf8')); }
+  catch {
+    const def = {
+      policy: '冻结', maxTiles: 90, expansionDirection: null, reservedPaths: [],
+      note: 'M1(铜水壶2000g+10洒水器)完成前不扩田 — farm-master-plan.md 战略定调',
+      updatedAt: new Date().toISOString()
+    };
+    try {
+      const tmp = REGION_PATH + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(def, null, 1));
+      fs.renameSync(tmp, REGION_PATH);
+    } catch { }
+    return def;
+  }
 }

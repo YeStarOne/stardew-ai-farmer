@@ -10,8 +10,12 @@ import {
   fishbotSet, openBin, foregroundIsStardew,
   isSellable, shouldStore, harvestCrops, sellAndStore,
   findChest, storeToChest, craftChest, placeChestNearHouse,
-  chopWood, expandField
+  chopWood, expandField,
+  compactState, ledInc, ledSnapshot, memAdd, memList, regionConfig
 } from './lib.mjs';
+
+// 收工体力目标(star rest 借鉴: 阈值收口成常量, 调整不用翻流程) — 政策仍是"用完再睡不浪费"
+const REST_TARGET = 15;
 
 // ===== 锁文件: 防止 cron 重复拉起多实例 =====
 const LOCK = 'D:/StardewAI/.day-loop.lock';
@@ -155,11 +159,15 @@ async function playOneDay(day) {
   await waterAll(14); // 新种的苗当天也要浇到(补一轮)
   await tryQuests(); // 邮件任务优先于杂务(有可交付物品时)
 
-  // 扩田: 种子还有剩但没空地 → 贴着田边翻新格再种
+  // 扩田: 种子还有剩但没地 → 贴着田边翻新格再种; ⚠️受 farm-region.json 区域门控(star 借鉴,
+  // 冻结策略不再靠口头规矩而是读配置), M1 完成前 policy=冻结 一律不扩
   {
     const s = await st();
     const seedsLeft = s.inventory.filter(i => SEED_RE.test(i.name)).reduce((a, i) => a + (i.stack ?? 1), 0);
-    if (seedsLeft > 0) {
+    const region = regionConfig();
+    if (seedsLeft > 0 && (region.policy === '冻结' || region.expansionDirection === null)) {
+      log(`扩田跳过: 区域策略=${region.policy}(${region.note})`);
+    } else if (seedsLeft > 0) {
       const tilled = await expandField(Math.min(seedsLeft, 10));
       if (tilled > 0) await replantAll();
     }
@@ -198,7 +206,7 @@ async function playOneDay(day) {
         lastReport = report;
       }
       const slots = s.inventory.filter(i => i.name).length;
-      if (slots >= 10) {
+      if (slots >= 11) {
         await manageInventory(chest);
         const s3 = await st();
         const slots3 = s3.inventory.filter(i => i.name).length;
@@ -214,7 +222,7 @@ async function playOneDay(day) {
           log('fishbot ON =', await fishbotSet(true));
         }
       }
-      if (s.time.timeOfDay >= 2300 || s.player.stamina < 15) {
+      if (s.time.timeOfDay >= 2300 || s.player.stamina < REST_TARGET) {
         log('收工: 时间', s.time.timeOfDay, '体力', Math.round(s.player.stamina));
         break;
       }
@@ -248,12 +256,26 @@ log('== Day' + s0.time.dayOfMonth, s0.time.timeOfDay, '钱', s0.player.money, '|
 
 const MAX_DAYS = 3;
 let day = s0.time.dayOfMonth;
+let curState = s0;
+{
+  const rules = memList('rule');
+  if (rules.length) log('记忆规矩:', rules.map(r => r.text).join(' / '));
+  log('累计账本:', JSON.stringify(ledSnapshot().totals));
+}
 for (let d = 0; d < MAX_DAYS; d++) {
   try {
+    const money0 = curState.player.money;
     const next = await playOneDay(day);
     if (!next) { log('睡觉失败, 退出'); break; }
+    // 日结(star 累计账本借鉴): 净额含花费, 只作参考; 卖/存件数由 sellAndStore 内部入账
+    const gain = next.player.money - money0;
+    ledInc('daysPlayed', 1, 'Day' + day);
+    ledInc('moneyEarned', gain, 'Day' + day + ' 净' + gain + 'g');
+    memAdd('event', `Day${day}: 钱${next.player.money}(净${gain}g) 体${Math.round(next.player.stamina)} ${next.location?.name || ''}`);
+    log('日结 Day' + day, '净', gain + 'g | 账本', JSON.stringify(ledSnapshot().totals));
+    curState = next;
     day = next.time.dayOfMonth;
-    log('=== 进入 Day' + day + ' ===');
+    log('=== 进入 Day' + day + ' ===', compactState(next));
   } catch (e) {
     log('当日流程异常:', e.message);
     try { await fishbotSet(false); } catch { }

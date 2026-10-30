@@ -116,3 +116,5 @@ MIT © YeStarOne
 | guide-museum-geodes.md | Donation rewards (δ Amulet +1 luck, gem replicator), geode rules |
 | guide-crops-profit.md | All-season crops g/day table, giant-crop 3x3, crow warning |
 | guide-animals.md | Coop/barn economics, mayo/cheese chain, auto-petter dependency |
+| guide-gifts-birthdays.md | Per-villager loved gifts + birthday calendar (wiki-verified), universal likes/hates |
+| star-project-study.md | Study of CSXizhang/star companion mod: adoptable features (BWIKI API, action journal, delta snapshots) |

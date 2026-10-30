@@ -98,3 +98,21 @@
 MIT © YeStarOne
 
 攻略来源：小黑盒社区帖子（作者 Aaa帅、candor），整理为 AI 可执行清单见 [docs/GUIDE.md](docs/GUIDE.md)。
+
+## Research notes (docs/research/)
+
+11 deep-dive documents compiled from the Stardew Valley wiki while playing:
+
+| Doc | What's inside |
+|---|---|
+| farm-master-plan.md | **Master plan**: M1 water-freedom → M2 money-freedom → M3 tech-freedom milestones |
+| farm-tech-research.md | Tool upgrades, sprinklers, artisan chain, Robin buildings, winter plan |
+| xhh-npc-research.md | Gift rules, loved gifts, birthday calendar, loop hooks |
+| guide-fishing-mine.md | Fish prices by season, rod progression, mine layers 1-120 |
+| guide-winter-spring.md | Winter/spring plan + full Community Center bundle checklist |
+| guide-skills-professions.md | Profession choices per skill (Miner→Prospector, Tiller→Artisan, ...) |
+| guide-festivals.md | Full festival calendar + what the AI should actually do each day |
+| guide-cooking-energy.md | Stamina economy, food buffs that stack, priority recipes |
+| guide-museum-geodes.md | Donation rewards (δ Amulet +1 luck, gem replicator), geode rules |
+| guide-crops-profit.md | All-season crops g/day table, giant-crop 3x3, crow warning |
+| guide-animals.md | Coop/barn economics, mayo/cheese chain, auto-petter dependency |
